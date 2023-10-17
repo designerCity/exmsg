@@ -1,11 +1,24 @@
 import 'package:exinstargram/palceselect.dart';
+import 'package:flutter/foundation.dart';
+import 'package:http_parser/http_parser.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:http/http.dart' as http;
 
 import 'main.dart';
 import 'package:flutter/material.dart';
 import 'palceselect.dart';
+
 // kakao map plugin
 import 'package:kakao_map_plugin/kakao_map_plugin.dart';
 
+// 사진 서버에 업로드하는 패키지
+import 'package:file_picker/file_picker.dart';
+import 'package:filesystem_picker/filesystem_picker.dart';
+import 'dart:io';
+
+// typed_data -> Unit8List 를 다룰 때 사용
+import 'dart:typed_data';
+import 'dart:convert';
 
 // 장소 등록 (upload) 페이지
 class Upload extends StatefulWidget {
@@ -27,7 +40,6 @@ class Upload extends StatefulWidget {
   final addMyData;
   final setUserContent;
 
-
   @override
   State<Upload> createState() => UploadState();
 }
@@ -35,9 +47,9 @@ class Upload extends StatefulWidget {
 class UploadState extends State<Upload> {
   // 위경도 placeselect.dart 에 보낼 것
 
-//  부모에서 관리하자
+  //  부모에서 관리하자
   String latitude = '35.189994848066405'; // 위도
-  String latitude = '35.189994848066405'; // 위도
+  String longitude = '126.82424155839115'; // 경도
 
   TextEditingController inputController = TextEditingController();
   TextEditingController _controller1 = TextEditingController();
@@ -53,10 +65,20 @@ class UploadState extends State<Upload> {
     '전시회',
     '카페'
   ];
+
   String selectedDropdown = '맛집';
-  // label text
+
   bool _isLabelVisible = true;
   var label = '등록하고자 하는 장소명을 입력해주세요';
+
+  // 위도 / 경도 변환하는 함수
+  // 이는 콜백 함수임.
+  void transLatLng(String lat,String lng) {
+    setState(() {
+      latitude = lat;
+      longitude = lng;
+    });
+  }
 
   // 별점을 부모에서 관리
   int rating = 0; // 부모 위젯에서 rating 변수를 관리
@@ -64,6 +86,7 @@ class UploadState extends State<Upload> {
   @override
   void initState() {
     super.initState();
+    //  InputController
     inputController.addListener(() {
       if (inputController.text.isNotEmpty) {
         setState(() {
@@ -75,7 +98,79 @@ class UploadState extends State<Upload> {
         });
       }
     });
+
   }
+
+  String showFileName = "";
+  // s3 에 보내기
+  final List<PlatformFile> _files = [];
+  // 파일을 업로드 하는 _pickFiles 함수
+  void _pickFiles() async {
+    List<PlatformFile>? uploadedFiles = (await FilePicker.platform.pickFiles(
+      allowMultiple: true,
+    ))
+        ?.files;
+    setState(() {
+      for (PlatformFile file in uploadedFiles!) {
+        _files.add(file);
+      }
+    });
+    print(FilePicker.platform.pickFiles());
+  }
+  // S3 에 이미지 보내기
+  Future<int> _uploadToSignedURL(
+      {required PlatformFile file, required String url}) async {
+    http.Response response = await http.put(Uri.parse(url), body: file.bytes);
+    return response.statusCode;
+  }
+
+  // img file 서버로 보내기 (순수)
+  var userImage;
+  final ImagePicker picker = ImagePicker();
+
+  PickedFile? _image; // 이미지 선택 전에 미리 선언
+  Future uploadImage() async {
+    if (_image != null) {
+      print('${_image}');
+      final uri = Uri.parse('UPLOAD_API_URL'); // 서버의 업로드 API URL로 변경
+      final request = http.MultipartRequest('POST', uri);
+      final bytes = await _image!.readAsBytes();
+      print(bytes);
+      request.files.add(
+        http.MultipartFile.fromBytes(
+          'file', // 서버에서 파일을 받을 필드 이름
+          bytes,
+          filename: 'image.jpg',
+          contentType: MediaType('image', 'jpeg'), // 이미지 형식에 따라 변경
+        ),
+      );
+
+      final response = await request.send();
+
+      if (response.statusCode == 200) {
+        print('Image uploaded successfully');
+        // 업로드 성공 시 처리
+      } else {
+        print('Image upload failed');
+        // 업로드 실패 시 처리
+      }
+    }
+  }
+
+  XFile? _pickedFile;
+  Future getImage() async {
+    final pickedFile = await ImagePicker().pickImage(source: ImageSource.gallery);
+    if (pickedFile != null) {
+      setState(() {
+        _pickedFile = _pickedFile;
+      });
+    } else {
+      if (kDebugMode) {
+        print('XFile : image is not selected 라고');
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -86,19 +181,34 @@ class UploadState extends State<Upload> {
           ),
           actions: [
             IconButton(
-              onPressed: (){
+              onPressed: () async {
                 // 등록한 게시물을 보여줄 수 있도록 widget. 으로 상속
                 widget.addMyData();
+                XFile? image = await ImagePicker().pickImage(
+                    source: ImageSource.gallery, // 위치 : 갤러리
+                    maxHeight: 75,
+                    maxWidth: 75,
+                    imageQuality: 30,
+                );
+                if (image != null) {
+                  setState((){
+                    userImage = File(image.path);
+                  });
+                }
+                uploadImage();         // server 에 이미지 업로드
                 Navigator.pop(context);
               },
               icon: Icon(Icons.send))
-          ]),
+          ]
+      ),
+
+
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Container(
             width: double.infinity,
-            margin: EdgeInsets.all(20),
+            margin: EdgeInsets.only(left: 20),
             decoration: BoxDecoration(
               color: Colors.white,
               borderRadius: BorderRadius.circular(20.0), // 원하는 깍임 정도를 설정합니다.
@@ -166,6 +276,30 @@ class UploadState extends State<Upload> {
               ),
             ),
           ),
+          // Container(
+          //   height: 20,
+          //   color: Colors.green,
+          //   child: InkWell(
+          //     child: Container(
+          //       color: Colors.green,
+          //     ),
+          //     //
+          //     onTap: () async {
+          //       FilePickerResult? result = await FilePicker.platform.pickFiles(
+          //         type: FileType.custom,
+          //         allowedExtensions: ['csv', 'svg', 'pdf', 'png'],
+          //       );
+          //       if( result != null && result.files.isNotEmpty ){
+          //         String fileName = result.files.first.name;
+          //
+          //         debugPrint(fileName);
+          //         setState(() {
+          //           showFileName = "Now File Name: $fileName";
+          //         });
+          //       }
+          //     },
+          //   ),
+          // ), // 사진이나 파일(csv, svg, pdf,, png)
           Center(
             child: Container(
               width: double.infinity,
@@ -183,11 +317,11 @@ class UploadState extends State<Upload> {
                         Navigator.push(
                           context,
                           // MaterialPageRoute(builder: (context) => settingPage(sendMessege: sendMessege, responseData: responseData)),
-                          MaterialPageRoute(builder: (context) => placeSelect(latitude: latitude)),
+                          MaterialPageRoute(builder: (context) => placeSelect(transLatLng: transLatLng,latitude: latitude, longitude: longitude,)),
                         );
                       },
                       icon: Icon(Icons.search), // 돋보기 아이콘
-                      label: Text('SEARCH', style: TextStyle(
+                      label: Text('장소 위치 검색 버튼', style: TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.w500,
                         ),
@@ -202,7 +336,7 @@ class UploadState extends State<Upload> {
                       ),
                     ),
                   ),
-
+                  // 카테고리 고르는 버튼
                   DropdownButton(
                     value: selectedDropdown,
                     items: dropdownList.map((String item) {
@@ -258,7 +392,7 @@ class UploadState extends State<Upload> {
                       borderRadius: BorderRadius.circular(20.0), // 원하는 깍임 정도를 설정합니다.
                     ),
                     padding: EdgeInsets.only(left: 20.0, right: 20.0, top: 5, bottom: 5), // 원하는 패딩 값을 설정합니다.
-                    margin: EdgeInsets.only(top: 10),
+                    margin: EdgeInsets.only(top: 0),
                     child: Text(
                       '별점과 후기 작성하고 마일리지를 획득하세요',
                       style: TextStyle(
@@ -329,20 +463,40 @@ class UploadState extends State<Upload> {
 
           // 장소 등록 버튼 구현
           Center(
-            child: TextButton(
-              onPressed: () {
-                Navigator.pop(context);
-                // btn click 시 POST 요청 보내기
-                print({
-                  '장소명' : '${inputController.text}',
-                  'review': '${_controller1.text}' ,
-                  'category' :'$selectedDropdown',
-                  'img': '${widget.userImage}',
-                  '별점': '${rating}',
-                  'latitude':  latitude,
-                });
-              },
-              child: Text('장소 등록'),
+            child: Container(
+              width: 500,
+              child: Row(
+                children: [
+                  TextButton(
+                    onPressed: () {
+                      // getImage();
+                      uploadImage();
+                      Navigator.pop(context);
+                      // btn click 시 POST 요청 보내기
+                      // print({
+                      //   '장소명' : '${inputController.text}',
+                      //   'review': '${_controller1.text}' ,
+                      //   'category' :'$selectedDropdown',
+                      //   'img': '${widget.userImage}',
+                      //   '별점': '${rating}',
+                      //   'latitude':  latitude,
+                      //   'longitude':  longitude,
+                      // });
+                    },
+                    child: Text('XFIle 으로 서버에 올리기 test', style: TextStyle(fontSize: 20, color: Colors.black),),
+                  ),
+                  TextButton(
+                    onPressed: () {
+                      // _pickFiles();
+                      // _uploadToSignedURL(file: userImage, url: '여기에 url')
+
+                      Navigator.pop(context);
+                      // btn click 시 POST 요청 보내기
+                    },
+                    child: Text('S3 에 바로 업로드', style: TextStyle(fontSize: 20),),
+                  ),
+                ],
+              ),
             ),
           ),
 
@@ -351,7 +505,7 @@ class UploadState extends State<Upload> {
     );
   }
 }
-
+// 별점 등록하는 위젯
 class StarRating extends StatelessWidget {
   final int rating;
   final ValueChanged<int> onRatingChanged;
@@ -379,7 +533,7 @@ class StarRating extends StatelessWidget {
     );
   }
 }
-
+// 말충선 꾸미기
 class TrianglePainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
@@ -401,3 +555,6 @@ class TrianglePainter extends CustomPainter {
     return false; // 업데이트가 필요하지 않음
   }
 }
+
+
+
